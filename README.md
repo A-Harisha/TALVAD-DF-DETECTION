@@ -247,5 +247,4 @@ tensorboard --logdir logs
 - Feature caches versioned by directory signature (`cache_v3`, `cache_v5_gfc`)
 - Training state persisted to `logs/<experiment>/training_status.json` after every epoch
 - Best checkpoint selected by AUC on validation set
-#   T A L V A D - D F - D E T E C T I O N  
- 
+#

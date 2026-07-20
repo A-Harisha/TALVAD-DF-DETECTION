@@ -1,0 +1,102 @@
+# ==========================================================================
+# TALVAD — .gitignore
+# Keeps the tracked repo to reviewer-facing source: code packages, configs,
+# paper/, docs/, figures/, README, requirements. Everything below is either
+# a large local artifact, a machine-specific cache, or third-party material.
+# ==========================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Virtual environments ---
+.venv/
+.venv*/
+venv/
+env/
+
+# --- Editor / tooling / agent state ---
+.vscode/
+.idea/
+.claude/
+claude-state/
+.stfolder/
+
+# --- Large training artifacts (regenerated locally) ---
+data/
+logs/
+checkpoints/
+features/**/cache*/
+*.log
+
+# --- Feature / preprocessing caches (incl. hash-named dirs) ---
+cache_build/
+inference_cache/
+**/feature_cache/
+**/preprocessed/
+3045dc1820b7/
+77d2ebe2bc7c/
+e5513f473758/
+# older hash-named caches (kept in case they reappear on other machines)
+2c335981f605/
+46c30e1a0165/
+a57b95e31e78/
+
+# --- Datasets (large, machine-specific — obtain separately, see README) ---
+datasets/LAV-DF/
+datasets/LAV-DF-REDUCED-COMPACT/
+datasets/FakeAVCeleb_v1.2/
+datasets/DFDC/
+datasets/Deepfake TIMIT/
+datasets/robustness/
+# NOTE: the Python loaders directly under datasets/ (*.py) ARE tracked.
+
+# --- Vendored third-party code (clone separately) ---
+third_party/
+
+# --- Downloaded reference papers (copyrighted third-party PDFs, ~255 MB) ---
+paper/reference_pdfs/
+
+# --- LaTeX build artifacts ---
+*.aux
+*.bbl
+*.blg
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+paper/main.log
+
+# --- Archived backups & superseded material ---
+archive/
+_archive/
+.git.corrupted-backup/
+
+# --- Not part of the reviewer code release (kept locally, not pushed) ---
+paper/
+docs/
+figures/
+draft_1.tex
+IEEEtran.cls
+*.tex
+*.cls
+
+# --- Archive/backup blobs anywhere ---
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# --- Generated visualization outputs (source scripts stay tracked) ---
+visualizations/*.png
+visualizations/*.json
+visualizations/lavdf_*/

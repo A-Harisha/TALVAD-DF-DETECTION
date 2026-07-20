@@ -1,0 +1,144 @@
+seed: 42
+experiment_name: talvad_l
+
+# TALVAD-L: anchor-free multi-scale transformer-pyramid LOCALIZER.
+# Encoder stack: WavLM-large + MFCC (audio) | auto_avsr lip-Conformer (correspondence
+# visual) | EfficientNet-B0 + spectral FFT (artifact). Re-extracted at seq_len=192.
+# Dims are GENEROUS for the first run (compute/memory not a concern) — tune after.
+
+dataset:
+  name: LAV-DF
+  root_dir: ./datasets/LAV-DF
+  metadata_file: ./data/lavdf_full_metadata.csv
+  annotation_json: ./datasets/LAV-DF/metadata.min.json
+  use_official_split: true
+  official_split_map: {train: train, val: dev, test: test}
+
+preprocessing:
+  fps: 25                       # AVSR native rate; the seq_len grid is duration-normalized
+  audio:
+    sample_rate: 16000
+    mono: true
+    preemphasis: 0.97
+    wavelet_denoise: false
+
+features:
+  pca_fit_n: 2000               # PCA fit on a sample of train clips (streaming pack; scales to full LAV-DF)
+  audio:
+    n_mfcc: 40                  # -> 120 with delta+delta2
+    n_fft: 2048
+    hop_length: 512
+  wavlm:
+    bundle: WAVLM_LARGE         # torchaudio.pipelines (no transformers dep) -> 1024-d
+    layer: -1
+    pca_dim: 512                # generous; 1024 -> 512
+  avsr:
+    ckpt: checkpoints/auto_avsr/vsr_trlrs3vox2_base.pth
+    pca_dim: 384                # generous; 768 -> 384
+  face:
+    margin: 0.3
+    min_conf: 0.90
+    eff_pca_dim: 256            # EfficientNet 1280 -> 256
+  spectral:
+    n_radial: 8
+    n_angular: 4
+    hf_residual: true
+    phase: true                 # -> 8*4 + 1 + 1 = 34
+
+model:
+  dims:
+    audio: 632                  # 120 MFCC + 512 WavLM-PCA
+    artic: 384                  # AVSR-PCA  (CMIS-2 correspondence visual side)
+    appearance: 256             # EfficientNet-PCA (artifact stream)
+    spectral: 34
+  fusion_hidden: 128
+  d_model: 256
+  n_heads: 8
+  ffn: 512
+  dropout: 0.1
+  n_levels: 4                   # 192 -> 96 -> 48 -> 24
+  layers_per_level: 2
+  app_proj_dim: 128
+  head_conv: 2
+  use_dfl: true                # distributional boundary regression (sub-step precision)
+  reg_max: 16                  # offset bins per side (in level-stride units)
+  cmis:
+    corr_dim: 128
+    spectral_hidden: 64
+    incon_hidden: 16
+    band_mlp: 32
+    coupling: true
+    warm_init: true
+    contrastive: true
+  cmrd:
+    enabled: true
+    hidden: 128
+  cbm:
+    enabled: true
+    hidden: 32
+
+localization:
+  # regression ranges per level, in LEVEL-0 frame units (max boundary distance a
+  # level is responsible for). Last level catches everything larger.
+  regression_ranges: [[0, 8], [8, 16], [16, 32], [32, 100000]]
+  center_radius: 1.5            # a step is positive if its center is within this many
+                                # level-0 units of inside a GT span (center-sampling)
+  decode:
+    score_thr: 0.05             # pre-NMS actionness gate (tuned on dev later)
+    # NOTE: center-sampled multiplicative gates collapse the score (CBM fires only
+    # at boundaries -> ~0 at the center; recon is driven low) — they zeroed AP after
+    # ep4 in run #1. CBM/recon stay as TRAINING signals; decode uses pure actionness.
+    # Re-introduce later sampled at the predicted boundaries / additively (ablation).
+    use_cbm_gate: false         # multiply score by CBM boundary energy at the center
+    use_recon_gate: false       # multiply score by reconstruction error at the center
+    method: soft               # soft (Soft-NMS) | fusion. A/B on the qual-trained model:
+                                # soft beat fusion (AP90 0.249 vs 0.190) — its top box is already tight.
+    fusion_iou: 0.5
+    use_qual: false            # centerness HELPS as a training aux loss but HURTS as a decode
+                                # reranker (AP90 0.249->0.164). Keep the head, don't rerank with it.
+    cbm_refine: false          # CBM-peak snap — diagnosed as HURTING (CBM not a reliable edge detector)
+    cbm_window: 4.0
+    soft_nms_sigma: 0.5
+    soft_nms_thr: 0.001
+    max_segments: 100
+
+training:
+  device: cuda
+  batch_size: 16
+  epochs: 40
+  sequence_length: 192          # high-res duration-normalized grid
+  lr: 0.0002
+  warmup_epochs: 5
+  lr_scheduler: cosine
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  gradient_clip: 1.0
+  mixed_precision: true
+  early_stopping: true
+  early_stopping_patience: 8
+  balanced_sampler: true
+  checkpoint_metric: map        # select on dev mAP (AP@0.5 peaks early, underselects high-IoU)
+  checkpoint_dir: ./checkpoints/talvad_l
+  logs_dir: ./logs
+  # ── loss weights (ablatable) ──
+  clip_loss_weight: 1.0         # BCE detection (keeps AUC)
+  cls_loss_weight: 1.0          # focal actionness
+  reg_loss_weight: 1.0          # DIoU boundary regression
+  qual_loss_weight: 1.0         # centerness / localization-quality head
+  dfl_loss_weight: 0.5          # distribution focal loss on boundary bins
+  bcl_loss_weight: 0.3          # boundary-contrastive (sharpen feat0 at edges) — the novelty
+  bcl_max_offset: 6
+  bcl_neg_margin: 0.2
+  cbm_loss_weight: 0.5          # CBM boundary energy (Gaussian-edge BCE)
+  recon_loss_weight: 0.5        # CMRD reconstruction (reals only)
+  contrastive_loss_weight: 0.10 # InfoNCE A/V correspondence (reals only)
+  contrastive_temperature: 0.07
+  contrastive_warmup_epochs: 5
+  focal_gamma: 2.0
+  cbm_sigma: 1.0                # Gaussian width (level-0 frames) of the boundary target
+
+evaluation:
+  output_dir: ./visualizations/talvad_l
+
+inference:
+  batch_size: 32

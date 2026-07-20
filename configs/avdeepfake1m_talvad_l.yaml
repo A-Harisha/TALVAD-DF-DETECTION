@@ -1,0 +1,133 @@
+seed: 42
+experiment_name: talvad_l_df1m
+
+# TALVAD-L on AV-Deepfake1M (DF1M): FIXED-FPS, sliding-window LOCALIZER.
+# Same model as the LAV-DF localizer (configs/lavdf_talvad_l.yaml) — the change is
+# the TIME AXIS: clips keep their real length at `fps` frames (no duration-normalize),
+# training crops `win_frames` windows, inference slides the window and stitches.
+# See docs/METHOD_DF1M.md. Encoders/PCA dims match LAV-DF so a LAV-DF checkpoint can
+# warm-start DF1M (train.init_from).
+
+dataset:
+  name: AV-Deepfake1M
+  root_dir: ./datasets/AV-Deepfake1M           # <- set to the downloaded root
+  index_json: ./data/df1m_present_all.min.json  # 50,424 train + 1,500 dev (split-tagged); GT segments for both splits
+
+preprocessing:
+  fps: 25                                       # the FIXED frame rate (the new time axis)
+  audio:
+    sample_rate: 16000
+    mono: true
+    preemphasis: 0.97
+    wavelet_denoise: false
+
+# ── sliding-window geometry (utils.window_ops) ──
+window:
+  win_frames: 96                                # 3.84 s window (divisible by max stride 8)
+  hop_frames: 48                                # 50% overlap -> every word-level fake is whole in >=1 window
+  neg_ratio: 1.0                                # empty windows kept per positive window (train sampling)
+  min_overlap_frames: 0.5                       # min GT/window overlap to count a window positive
+  eval_max_clips: 1500                          # dev-eval subsample during training (full set at final eval)
+
+features:
+  pca_fit_n: 2000                               # PCA fit FRESH on DF1M train (we train on DF1M, not zero-shot)
+  audio:
+    n_mfcc: 40
+    n_fft: 2048
+    hop_length: 512
+  wavlm:
+    bundle: WAVLM_LARGE
+    layer: -1
+    pca_dim: 512
+  avsr:
+    ckpt: checkpoints/auto_avsr/vsr_trlrs3vox2_base.pth
+    pca_dim: 384
+  face:
+    margin: 0.3
+    min_conf: 0.90
+    eff_pca_dim: 256
+  spectral:
+    n_radial: 8
+    n_angular: 4
+    hf_residual: true
+    phase: true
+
+model:                                          # identical to lavdf_talvad_l.yaml (warm-start compatible)
+  dims: {audio: 632, artic: 384, appearance: 256, spectral: 34}
+  fusion_hidden: 128
+  d_model: 256
+  n_heads: 8
+  ffn: 512
+  dropout: 0.1
+  n_levels: 4                                   # 96 -> 48 -> 24 -> 12
+  layers_per_level: 2
+  app_proj_dim: 128
+  head_conv: 2
+  use_dfl: true
+  reg_max: 16
+  cmis: {corr_dim: 128, spectral_hidden: 64, incon_hidden: 16, band_mlp: 32, coupling: true, warm_init: true, contrastive: true}
+  cmrd: {enabled: true, hidden: 128}
+  cbm: {enabled: true, hidden: 32}
+
+localization:
+  # regression ranges in WINDOW-LOCAL frame units (DF1M fakes are short -> low ranges matter)
+  regression_ranges: [[0, 8], [8, 16], [16, 32], [32, 100000]]
+  center_radius: 1.5
+  decode:
+    score_thr: 0.05
+    use_cbm_gate: false
+    use_recon_gate: false
+    method: soft
+    use_qual: false
+    cbm_refine: false
+    soft_nms_sigma: 0.5
+    soft_nms_thr: 0.001
+    max_segments: 100
+
+training:
+  device: cuda
+  batch_size: 16
+  epochs: 30
+  sequence_length: 96                           # == window.win_frames (the per-window length the model sees)
+  lr: 0.0002
+  warmup_epochs: 3
+  lr_scheduler: cosine
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  gradient_clip: 1.0
+  mixed_precision: true
+  early_stopping: true
+  early_stopping_patience: 8
+  balanced_sampler: false                       # window sampling already balances pos/neg
+  checkpoint_metric: map
+  checkpoint_dir: ./checkpoints/talvad_l_df1m
+  logs_dir: ./logs
+  init_from: ./checkpoints/talvad_l_full/best_model.pt   # warm-start from LAV-DF SOTA (set "" to train fresh)
+  # ── loss weights (same recipe that won LAV-DF; BCL = the high-IoU novelty) ──
+  clip_loss_weight: 1.0
+  cls_loss_weight: 1.0
+  reg_loss_weight: 1.0
+  qual_loss_weight: 1.0
+  dfl_loss_weight: 0.5
+  bcl_loss_weight: 0.3
+  bcl_max_offset: 6
+  bcl_neg_margin: 0.2
+  cbm_loss_weight: 0.5
+  recon_loss_weight: 0.5
+  contrastive_loss_weight: 0.10
+  contrastive_temperature: 0.07
+  contrastive_warmup_epochs: 3
+  focal_gamma: 2.0
+  cbm_sigma: 1.0
+
+evaluation:
+  output_dir: ./visualizations/talvad_l_df1m
+
+inference:
+  batch_size: 32
+
+# feature cache root (raw_avsr/raw_main/feats/pca/manifest live under <root>/fps<fps>).
+# Set to the Z: network share because D: is full. Junctions can't target a network
+# drive, so the scripts write here directly. Pack dir = Z:/talvad_l_df1m/fps25.
+output:
+  root: Z:/talvad_l_df1m

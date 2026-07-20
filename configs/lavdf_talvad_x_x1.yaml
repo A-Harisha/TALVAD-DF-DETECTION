@@ -1,0 +1,112 @@
+seed: 42
+experiment_name: talvad_x_x1
+
+# TALVAD-X "x1" recipe — the cross-dataset / CMIS / localization levers turned ON
+# (motion-aware CMIS, spectral-shortcut augmentation, focal frame loss + strong head,
+# InfoNCE warm-up, balanced sampling). Same features/cache as the base config; only
+# the training recipe + two model flags differ, so it loads the existing fps12_sl48 pack.
+# Compare against the base config (configs/lavdf_talvad_x.yaml, --tag base).
+
+dataset:
+  name: LAV-DF
+  root_dir: ./datasets/LAV-DF
+  metadata_file: ./data/lavdf_full_metadata.csv
+  annotation_json: ./datasets/LAV-DF/metadata.min.json
+  use_official_split: true
+  official_split_map:
+    train: train
+    val: dev
+    test: test
+
+preprocessing:
+  fps: 12
+  audio:
+    sample_rate: 16000
+    mono: true
+    preemphasis: 0.97
+    wavelet_denoise: false
+
+features:
+  pca_dim: 256
+  audio:
+    n_mfcc: 40
+    n_fft: 2048
+    hop_length: 512
+  face:
+    margin: 0.3
+    min_conf: 0.90
+  spectral:
+    n_radial: 8
+    n_angular: 4
+    hf_residual: true
+    phase: true
+
+model:
+  dims:
+    audio: 376
+    appearance: 256
+    spectral: 34
+  hidden_dim_1: 128
+  hidden_dim_2: 64
+  dropout: 0.4
+  dense_dim: 64
+  n_heads: 4
+  frame_localization: true
+  frame_head_strong: true       # ON: 2-layer MLP frame head
+  cmis:
+    enabled: true
+    spectral_branch: true
+    consistency_branch: true
+    coupling: true
+    warm_init: true
+    contrastive: true
+    motion: true                # ON: appearance frame-deltas feed the A/V correspondence
+    corr_dim: 128
+    spectral_hidden: 64
+    incon_hidden: 16
+    band_mlp: 32
+
+training:
+  device: cuda
+  batch_size: 32
+  epochs: 40
+  sequence_length: 48
+  lr: 0.0002
+  warmup_epochs: 5
+  lr_scheduler: cosine
+  lr_min: 1.0e-6
+  label_smoothing: 0.05
+  weight_decay: 0.05
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 1
+  mixed_precision: true
+  early_stopping: true
+  early_stopping_patience: 8
+  feature_noise_std: 0.03
+  temporal_mask_steps: 3
+  modality_dropout_p: 0.15
+  tune_threshold: true
+  threshold_metric: balanced_accuracy
+  checkpoint_metric: auc
+  checkpoint_dir: ./checkpoints/talvad_x_x1
+  logs_dir: ./logs
+  # aux losses
+  localization_loss_weight: 0.5     # raised: stronger localization supervision
+  cmis_incon_loss_weight: 0.10
+  contrastive_loss_weight: 0.3      # raised: lean on A/V correspondence
+  contrastive_temperature: 0.07
+  contrastive_warmup_epochs: 5      # ramp InfoNCE before BCE locks onto spectral
+  # cross-dataset levers
+  balanced_sampler: true            # ON: fixes the ~2.7:1 fake skew
+  spectral_aug_p: 0.3               # ON: breaks the LAV-DF frequency fingerprint shortcut
+  instance_norm_p: 0.0              # eval-time lever; left off in training to isolate
+  frame_loss: focal                 # ON: focal loss for the rare fake frames
+  dann_weight: 0.0                  # off here; enable for the Phase-4 DG variant
+
+evaluation:
+  threshold: 0.5
+  output_dir: ./visualizations/talvad_x_x1
+  instance_norm: false              # flip to true at cross-dataset eval via --set
+
+inference:
+  batch_size: 64

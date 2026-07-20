@@ -1,0 +1,132 @@
+seed: 42
+experiment_name: talvad_l_df1m_boundary
+
+# Boundary-precision variant of avdeepfake1m_talvad_l.yaml. Targets the high-IoU
+# gap (AP@0.9/0.95). Changes vs base:
+#   - propose->refine boundary head (model.use_refine) + reg_coarse deep-supervision
+#   - reg_max 16->24 (finer DFL bins), center_radius 1.5->1.0 (tighter assignment)
+#   - hop 48->24 (2x window overlap -> more boundary supervision)
+#   - dfl 0.5->1.0, bcl 0.3->0.5 (emphasise boundary losses)
+#   - warm-start from the epoch-20 DF1M best (partial load: resized/new heads train fresh)
+#   - separate checkpoint_dir so the current best_model.pt is NOT clobbered
+
+dataset:
+  name: AV-Deepfake1M
+  root_dir: ./datasets/AV-Deepfake1M
+  index_json: ./data/df1m_present_all.min.json
+
+preprocessing:
+  fps: 25
+  audio:
+    sample_rate: 16000
+    mono: true
+    preemphasis: 0.97
+    wavelet_denoise: false
+
+window:
+  win_frames: 96
+  hop_frames: 24                                # 2x overlap (was 48) -> more boundary supervision
+  neg_ratio: 1.0
+  min_overlap_frames: 0.5
+  eval_max_clips: 1500
+
+features:
+  pca_fit_n: 2000
+  audio:
+    n_mfcc: 40
+    n_fft: 2048
+    hop_length: 512
+  wavlm:
+    bundle: WAVLM_LARGE
+    layer: -1
+    pca_dim: 512
+  avsr:
+    ckpt: checkpoints/auto_avsr/vsr_trlrs3vox2_base.pth
+    pca_dim: 384
+  face:
+    margin: 0.3
+    min_conf: 0.90
+    eff_pca_dim: 256
+  spectral:
+    n_radial: 8
+    n_angular: 4
+    hf_residual: true
+    phase: true
+
+model:
+  dims: {audio: 632, artic: 384, appearance: 256, spectral: 34}
+  fusion_hidden: 128
+  d_model: 256
+  n_heads: 8
+  ffn: 512
+  dropout: 0.1
+  n_levels: 4
+  layers_per_level: 2
+  app_proj_dim: 128
+  head_conv: 2
+  use_dfl: true
+  reg_max: 24                                   # was 16 -> finer boundary distribution
+  use_refine: true                              # propose->refine boundary head
+  refine_max_offset: 4.0                        # max |correction| in level-stride units
+  cmis: {corr_dim: 128, spectral_hidden: 64, incon_hidden: 16, band_mlp: 32, coupling: true, warm_init: true, contrastive: true}
+  cmrd: {enabled: true, hidden: 128}
+  cbm: {enabled: true, hidden: 32}
+
+localization:
+  regression_ranges: [[0, 8], [8, 16], [16, 32], [32, 100000]]
+  center_radius: 1.0                            # was 1.5 -> tighter positive assignment
+  decode:
+    score_thr: 0.10                             # from the decode sweep (cleaner, same AP)
+    use_cbm_gate: false
+    use_recon_gate: false
+    method: soft
+    use_qual: false
+    cbm_refine: false
+    soft_nms_sigma: 0.6                          # from the decode sweep
+    soft_nms_thr: 0.001
+    max_segments: 100
+
+training:
+  device: cuda
+  batch_size: 16
+  epochs: 30
+  sequence_length: 96
+  lr: 0.0002
+  warmup_epochs: 3
+  lr_scheduler: cosine
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  gradient_clip: 1.0
+  mixed_precision: true
+  early_stopping: true
+  early_stopping_patience: 8
+  balanced_sampler: false
+  checkpoint_metric: map
+  checkpoint_dir: ./checkpoints/talvad_l_df1m_boundary   # separate -> does NOT clobber current best
+  logs_dir: ./logs
+  init_from: ./checkpoints/talvad_l_df1m/best_model.pt   # warm-start from the epoch-20 DF1M best
+  clip_loss_weight: 1.0
+  cls_loss_weight: 1.0
+  reg_loss_weight: 1.0
+  reg_coarse_loss_weight: 0.5                    # deep supervision on pre-refine boundaries
+  qual_loss_weight: 1.0
+  dfl_loss_weight: 1.0                           # was 0.5 -> emphasise boundary distribution
+  bcl_loss_weight: 0.5                           # was 0.3 -> emphasise boundary contrastive
+  bcl_max_offset: 6
+  bcl_neg_margin: 0.2
+  cbm_loss_weight: 0.5
+  recon_loss_weight: 0.5
+  contrastive_loss_weight: 0.10
+  contrastive_temperature: 0.07
+  contrastive_warmup_epochs: 3
+  focal_gamma: 2.0
+  cbm_sigma: 1.0
+
+evaluation:
+  output_dir: ./visualizations/talvad_l_df1m_boundary
+
+inference:
+  batch_size: 32
+
+output:
+  root: F:/talvad_df1m_val_zeroshot   # zero-shot DF1M-val eval (eval reads --pack directly; cosmetic here)

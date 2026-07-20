@@ -1,0 +1,116 @@
+seed: 42
+experiment_name: talvad_v5
+
+dataset:
+  name: LAV-DF
+  root_dir: ./datasets/LAV-DF-REDUCED-COMPACT/LAV-DF
+  metadata_file: ./data/lavdf_compact_metadata.csv
+  cache_dir: ./data/cache_v3          # reuse v4 MFCC+ResNet cache — GFC extracted separately
+  gfc_cache_dir: ./data/cache_v5_gfc  # parallel GFC cache (FFT-only, fast first run)
+  max_samples: 0
+  train_on_all: false
+  split:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+  balance_classes: false
+  k_fold:
+    enabled: false
+    n_splits: 3
+    random_state: 42
+  annotation_json: ./datasets/LAV-DF/metadata.min.json
+
+preprocessing:
+  fps: 2
+  frame_size: [224, 224]
+  grayscale: false
+  audio:
+    sample_rate: 16000
+    mono: true
+    wav_format: true
+    preemphasis: 0.97
+    wavelet_denoise: false
+
+features:
+  cache_enabled: true
+  per_sample_norm: false
+  audio:
+    n_mfcc: 40
+    n_fft: 2048
+    hop_length: 512
+  cnn:
+    enabled: true
+    backbone: resnet18
+    pretrained: true
+    image_size: 224
+    batch_size: 64
+    device: cuda
+  gfc:
+    enabled: true
+    n_bands: 8                        # 8 annular frequency bands per frame
+
+optimization:
+  feature_selection: false
+  n_sharks: 20
+  max_iter: 30
+  min_features: 32
+  max_features: 400
+  parallel_workers: 2
+  fitness_weights:
+    accuracy: 0.3
+    f1: 0.4
+    auc: 0.3
+
+model:
+  # input_dim = 120 audio + 512 resnet18 + 8 GFC = 640
+  input_dim: 640
+  hidden_dim_1: 128
+  hidden_dim_2: 64
+  dropout: 0.6
+  dense_dim: 64
+
+  cross_attention: true
+  n_heads: 4
+
+  temporal_feature_selection: true
+  selector_dim: 64
+  tdfs_temperature: 0.5
+  tdfs_l1_weight: 1.0e-4
+
+  frame_localization: true
+
+training:
+  batch_size: 16
+  epochs: 80
+  sequence_length: 24
+  lr: 0.0001
+  warmup_epochs: 5                    # linear LR ramp before cosine decay
+  lr_scheduler: cosine
+  lr_min: 1.0e-6
+  label_smoothing: 0.1
+  weight_decay: 0.1
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 2
+  mixed_precision: true
+  early_stopping_patience: 12
+  feature_noise_std: 0.05
+  temporal_mask_steps: 3      # zero ~3 of 24 timesteps per sample (p=0.125)
+  modality_dropout_p: 0.15    # 15% audio-only drop, 15% video-only drop
+  class_weighting: false
+  balanced_sampler: true
+  tune_threshold: true
+  threshold_metric: balanced_accuracy
+  checkpoint_metric: auc
+  checkpoint_dir: ./checkpoints/talvad_v5
+  logs_dir: ./logs
+
+  localization_loss_weight: 0.05
+  tdfs_l1_weight: 0.05
+  av_agreement_weight: 0.1            # A/V sync loss: real→high sim, fake→low sim
+
+evaluation:
+  threshold: 0.5
+  output_dir: ./visualizations/talvad_v5
+
+inference:
+  batch_size: 8
